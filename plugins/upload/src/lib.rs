@@ -18,6 +18,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 use read_progress_stream::ReadProgressStream;
 
 use std::{collections::HashMap, sync::Mutex};
+use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Error>;
 
