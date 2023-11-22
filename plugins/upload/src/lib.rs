@@ -70,16 +70,37 @@ async fn download<R: Runtime>(
     let mut file = BufWriter::new(File::create(file_path).await?);
     let mut stream = response.bytes_stream();
 
+    let mut last_emit_time = Instant::now();
+    let mut temp_progress = 0;
+
     while let Some(chunk) = stream.try_next().await? {
         file.write_all(&chunk).await?;
-        let _ = window.emit(
-            "download://progress",
-            ProgressPayload {
-                id,
-                progress: chunk.len() as u64,
-                total,
-            },
-        );
+        temp_progress += chunk.len() as u64;
+        let elapsed = last_emit_time.elapsed();
+        if elapsed >= Duration::from_secs(1) {
+            window
+                .emit(
+                    "download://progress",
+                    ProgressPayload {
+                        id,
+                        progress: temp_progress as u64,
+                        total,
+                    },
+                );
+            last_emit_time = Instant::now();
+            temp_progress = 0;
+        }
+    }
+    if temp_progress != 0 {
+        window
+            .emit(
+                "download://progress",
+                ProgressPayload {
+                    id,
+                    progress: temp_progress as u64,
+                    total,
+                },
+            );
     }
     file.flush().await?;
 
@@ -99,7 +120,7 @@ async fn upload<R: Runtime>(
 
     // Create the request and attach the file to the body
     let client = reqwest::Client::new();
-    let mut request = client.post(url).body(file_to_body(id, window, file));
+    let mut request = client.put(url).body(file_to_body(id, window, file));
 
     // Loop trought the headers keys and values
     // and add them to the request object.
@@ -115,17 +136,27 @@ async fn upload<R: Runtime>(
 fn file_to_body<R: Runtime>(id: u32, window: Window<R>, file: File) -> reqwest::Body {
     let stream = FramedRead::new(file, BytesCodec::new()).map_ok(|r| r.freeze());
     let window = Mutex::new(window);
+
+    let mut temp_progress = 0;
+    let mut last_emit_time = Instant::now();
+
     reqwest::Body::wrap_stream(ReadProgressStream::new(
         stream,
         Box::new(move |progress, total| {
-            let _ = window.lock().unwrap().emit(
-                "upload://progress",
-                ProgressPayload {
-                    id,
-                    progress,
-                    total,
-                },
-            );
+            temp_progress = temp_progress + progress;
+            let elapsed = last_emit_time.elapsed();
+            if elapsed >= Duration::from_secs(1) {
+                let _ = window.lock().unwrap().emit(
+                    "upload://progress",
+                    ProgressPayload {
+                        id,
+                        progress,
+                        total,
+                    },
+                );
+                temp_progress = 0;
+                last_emit_time = Instant::now();
+            }
         }),
     ))
 }
